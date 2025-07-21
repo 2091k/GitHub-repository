@@ -410,7 +410,7 @@
         /* 批量操作工具栏 */
         .batch-toolbar {
             position: fixed;
-            bottom: 80px;
+            bottom: 107px; /* 距离底部工具栏间距越大间距越大 */
             left: 0;
             right: 0;
             display: flex;
@@ -699,7 +699,7 @@
                 <p class="font-medium mb-2">如何获取 Token？</p>
                 <ol class="list-decimal pl-5 space-y-1">
                     <li>登录 GitHub 账户</li>
-                    <li>访问 <a href="https://github.com/settings/tokens/new" target="_blank" class="text-blue-500 hover:underline">开发者设置</a></li>
+                    <li>访问 <a href="https://github.com/settings/tokens" target="_blank" class="text-blue-500 hover:underline">开发者设置</a></li>
                     <li>创建新的个人访问令牌</li>
                     <li>勾选 repo 权限</li>
                 </ol>
@@ -791,6 +791,10 @@
             <button id="select-btn" class="glass-btn p-3 hidden" title="选择文件">
                 <i class="fas fa-check-square text-blue-500"></i>
             </button>
+            <!-- 新增同步分支按钮 -->
+            <button id="sync-branch-btn" class="glass-btn p-3 hidden" title="同步分支">
+                <i class="fas fa-code-merge text-blue-500"></i>
+            </button>
             <!-- 添加静态网站按钮 -->
             <button id="static-site-btn" class="glass-btn p-3 hidden" title="托管静态网站">
                 <i class="fas fa-globe text-green-500"></i>
@@ -803,6 +807,11 @@
                 <i class="fas fa-check-circle mr-2"></i>
                 <span id="selected-count">0</span> 已选
             </div>
+            <!-- 新增全选按钮 -->
+            <button id="batch-select-all-btn" class="batch-toolbar-btn" title="全选/取消全选">
+                <i class="fas fa-check-double"></i>
+                <span id="batch-select-all-text">全选</span>
+            </button>
             <button id="batch-download-btn" class="batch-toolbar-btn" title="下载选中文件">
                 <i class="fas fa-download"></i>
                 <span>下载</span>
@@ -810,6 +819,11 @@
             <button id="batch-delete-btn" class="batch-toolbar-btn" title="删除选中文件">
                 <i class="fas fa-trash"></i>
                 <span>删除</span>
+            </button>
+            <!-- 新增批量同步按钮 -->
+            <button id="batch-sync-btn" class="batch-toolbar-btn hidden" title="同步选中仓库">
+                <i class="fas fa-sync-alt"></i>
+                <span>同步</span>
             </button>
             <button id="batch-cancel-btn" class="batch-toolbar-btn" title="取消选择">
                 <i class="fas fa-times"></i>
@@ -925,6 +939,11 @@
             <i class="fas fa-hammer"></i>
             <span>运行工作流</span>
         </div>
+        <!-- 新增同步分支选项 -->
+        <div id="context-sync-branch" class="context-menu-item">
+            <i class="fas fa-code-merge text-blue-500"></i>
+            <span>同步分支</span>
+        </div>
         <div class="context-menu-divider"></div>
         <div id="context-delete" class="context-menu-item">
             <i class="fas fa-trash text-red-500"></i>
@@ -1013,19 +1032,35 @@
         </div>
     </div>
 
+    <!-- 同步分支对话框 -->
+    <div id="sync-branch-dialog" class="fixed inset-0 z-50 dialog-overlay flex items-center justify-center p-4 opacity-0 pointer-events-none transition-opacity duration-300">
+        <div id="sync-branch-content" class="dialog-content p-6 rounded-xl w-full max-w-md transform scale-90 transition-transform duration-300">
+            <h3 id="sync-branch-title" class="text-xl font-bold mb-2">同步分支</h3>
+            <p id="sync-branch-message" class="text-gray-700 mb-6">您确定要将上游仓库的默认分支同步到当前仓库的 <span id="sync-target-branch" class="font-semibold"></span> 分支吗？</p>
+            <div id="sync-branch-buttons" class="flex justify-end gap-3">
+                <button id="sync-branch-cancel" class="glass-btn px-4 py-2">取消</button>
+                <button id="sync-branch-confirm" class="glass-btn glass-btn-primary px-4 py-2">确认同步</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // 全局状态
         let currentRepo = '';
         let currentPath = '';
-        let currentFiles = [];
+        let currentFiles = []; // This will hold the items currently displayed (repos or files)
         let githubToken = '';
-        let fileToDelete = null;
+        let fileToDelete = null; // Used for single/batch delete and batch sync confirmation
         let selectedFiles = new Set();
         let contextMenuTarget = null;
         let currentUser = null;
         let buildTimer = null;
         let buildStatus = null;
         let activeRepoForPages = ''; // 新增：用于 Pages 操作的目标仓库
+        let defaultBranchOfCurrentRepo = ''; // 新增：用于存储当前仓库的默认分支
+
+        // 新增：用于存储同步分支对话框的目标仓库信息
+        let repoToSync = null;
 
         // 滚动相关变量
         let scrollTimeout;
@@ -1035,7 +1070,7 @@
         const SCROLL_DELAY = 100; // 滚动停止后显示工具栏的延迟
 
         // 新增：默认背景图片和本地存储键
-        const DEFAULT_BG_IMAGE = 'https://bing.img.run/uhd.php';
+        const DEFAULT_BG_IMAGE = 'https://images.unsplash.com/photo-1557683316-973673baf923?q=80&w=2000&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D';
         const LOCAL_STORAGE_BG_KEY = 'github_mgr_bg_image';
         const LOCAL_STORAGE_THEME_KEY = 'github_mgr_theme';
 
@@ -1137,6 +1172,19 @@
         // 新增DOM元素 (用户头像)
         const userAvatarBtn = document.getElementById('user-avatar-btn');
         const userAvatarInfo = document.getElementById('user-avatar-info');
+
+        // 新增同步分支相关DOM元素
+        const syncBranchBtn = document.getElementById('sync-branch-btn');
+        const contextSyncBranch = document.getElementById('context-sync-branch');
+        const syncBranchDialog = document.getElementById('sync-branch-dialog');
+        const syncBranchConfirm = document.getElementById('sync-branch-confirm');
+        const syncBranchCancel = document.getElementById('sync-branch-cancel');
+        const syncTargetBranchSpan = document.getElementById('sync-target-branch');
+        const batchSyncBtn = document.getElementById('batch-sync-btn'); // 新增批量同步按钮DOM
+
+        // 新增全选按钮DOM元素
+        const batchSelectAllBtn = document.getElementById('batch-select-all-btn');
+        const batchSelectAllText = document.getElementById('batch-select-all-text');
 
         // 文件类型图标映射
         const fileTypeIcons = {
@@ -1308,17 +1356,35 @@
             });
 
             // 确认对话框事件监听
-            confirmYes.addEventListener('click', () => {
-                if (fileToDelete) {
-                    if (Array.isArray(fileToDelete)) {
-                        deleteFiles(fileToDelete);
-                    } else if (fileToDelete.type === 'repo') {
-                        deleteRepository(fileToDelete);
+            confirmYes.addEventListener('click', async () => {
+                // Store fileToDelete locally before potentially clearing it in hideConfirmDialog
+                const currentFileToDelete = fileToDelete;
+                hideConfirmDialog(); // Close the dialog immediately upon confirmation
+                exitSelectMode(); // Close batch toolbar when confirming any action
+
+                if (currentFileToDelete && Array.isArray(currentFileToDelete) && currentFileToDelete.every(item => item.type === 'repo')) {
+                    // 这是批量同步操作
+                    await performBatchSync(currentFileToDelete);
+                } else if (currentFileToDelete) {
+                    // 现有删除逻辑
+                    if (Array.isArray(currentFileToDelete)) {
+                        // 批量删除文件或仓库
+                        const isRepos = currentFileToDelete.every(item => item.type === 'repo');
+                        if (isRepos) {
+                            // 批量删除仓库
+                            await Promise.all(currentFileToDelete.map(repo => deleteRepository(repo)));
+                            showToast(`成功删除 ${currentFileToDelete.length} 个仓库`);
+                            loadRepositories(); // Refresh repo list
+                        } else {
+                            // 批量删除文件
+                            await deleteFiles(currentFileToDelete);
+                        }
+                    } else if (currentFileToDelete.type === 'repo') {
+                        deleteRepository(currentFileToDelete);
                     } else {
-                        deleteFile(fileToDelete);
+                        deleteFile(currentFileToDelete);
                     }
                 }
-                hideConfirmDialog();
             });
 
             confirmNo.addEventListener('click', () => {
@@ -1417,16 +1483,48 @@
 
             batchDeleteBtn.addEventListener('click', () => {
                 if (selectedFiles.size > 0) {
+                    const selectedItems = Array.from(selectedFiles);
+                    const isRepos = selectedItems.every(item => item.type === 'repo');
+                    const message = isRepos
+                        ? `您确定要删除选中的 ${selectedItems.length} 个仓库吗？此操作不可撤销且会删除所有仓库内容。`
+                        : `您确定要删除选中的 ${selectedItems.length} 个文件吗？此操作不可撤销。`;
                     showConfirmDialog(
-                        '确认删除',
-                        `您确定要删除选中的 ${selectedFiles.size} 个文件吗？此操作不可撤销。`,
-                        Array.from(selectedFiles)
+                        isRepos ? '确认删除仓库' : '确认删除',
+                        message,
+                        selectedItems,
+                        isRepos ? '确认删除仓库' : '确认删除'
                     );
                 }
             });
 
+            // 新增批量同步按钮事件
+            batchSyncBtn.addEventListener('click', () => {
+                if (selectedFiles.size === 0) {
+                    showToast('请选择要同步的仓库');
+                    return;
+                }
+
+                const reposToSync = Array.from(selectedFiles).filter(item => item.type === 'repo');
+                if (reposToSync.length === 0) {
+                    showToast('没有选中任何仓库进行同步');
+                    return;
+                }
+
+                showConfirmDialog(
+                    '确认批量同步',
+                    `您确定要同步选中的 ${reposToSync.length} 个仓库吗？此操作将尝试将上游更改合并到您的分支。`,
+                    reposToSync, // Pass the array of repos to sync
+                    '确认同步' // Pass the button text
+                );
+            });
+
             batchCancelBtn.addEventListener('click', () => {
                 exitSelectMode();
+            });
+
+            // 新增全选按钮事件监听
+            batchSelectAllBtn.addEventListener('click', () => {
+                toggleSelectAll();
             });
 
             // 上下文菜单事件
@@ -1463,7 +1561,7 @@
                 if (contextMenuTarget && contextMenuTarget.type === 'file') {
                     const [owner, repoName] = currentRepo.split('/');
                     const filePath = currentPath ? `${currentPath}/${contextMenuTarget.name}` : contextMenuTarget.name;
-                    const jsdelivrLink = `https://cdn.jsdelivr.net/gh/${owner}/${repoName}@main/${filePath}`;
+                    const jsdelivrLink = `https://cdn.jsdelivr.net/gh/${owner}/${repoName}@${defaultBranchOfCurrentRepo}/${filePath}`;
                     copyToClipboard(jsdelivrLink, 'jsDelivr CDN 链接已复制');
                 }
                 hideContextMenu();
@@ -1475,13 +1573,15 @@
                         showConfirmDialog(
                             '确认删除仓库',
                             `您确定要删除仓库 "${contextMenuTarget.name}" 吗？此操作不可撤销且会删除所有仓库内容。`,
-                            contextMenuTarget
+                            contextMenuTarget,
+                            '确认删除仓库'
                         );
                     } else {
                         showConfirmDialog(
                             '确认删除',
                             `您确定要删除 "${contextMenuTarget.name}" 吗？此操作不可撤销。`,
-                            contextMenuTarget
+                            contextMenuTarget,
+                            '确认删除'
                         );
                     }
                 }
@@ -1499,7 +1599,7 @@
             // 禁用静态网站菜单项点击 (New)
             contextDisablePages.addEventListener('click', () => {
                 if (contextMenuTarget) {
-                    disableGitHubPages(contextMenuTarget);
+                    disableGitHubPages({ path: contextMenuTarget.path }); // Pass path for consistency
                 }
                 hideContextMenu();
             });
@@ -1508,6 +1608,14 @@
             contextBuildApp.addEventListener('click', () => {
                 if (contextMenuTarget) {
                     buildApp(contextMenuTarget);
+                }
+                hideContextMenu();
+            });
+
+            // 新增同步分支菜单项点击
+            contextSyncBranch.addEventListener('click', () => {
+                if (contextMenuTarget) {
+                    showSyncBranchDialog(contextMenuTarget); // Pass the repoInfo directly
                 }
                 hideContextMenu();
             });
@@ -1578,6 +1686,37 @@
             forkRepoDialog.addEventListener('click', (e) => {
                 if (e.target === forkRepoDialog) {
                     hideForkRepoDialog();
+                }
+            });
+
+            // 同步分支按钮事件 (单个仓库同步)
+            syncBranchBtn.addEventListener('click', () => {
+                if (currentRepo && defaultBranchOfCurrentRepo) {
+                    showSyncBranchDialog({ path: currentRepo, defaultBranch: defaultBranchOfCurrentRepo });
+                } else {
+                    showToast('请先进入一个仓库');
+                }
+            });
+
+            // 同步分支对话框事件
+            syncBranchConfirm.addEventListener('click', () => {
+                if (repoToSync && repoToSync.type === 'repo') { // Use repoToSync for context menu initiated sync
+                    syncBranch(repoToSync.path, repoToSync.defaultBranch);
+                } else if (currentRepo && defaultBranchOfCurrentRepo) { // Fallback for main toolbar button (if it existed and used this logic)
+                    syncBranch(currentRepo, defaultBranchOfCurrentRepo);
+                } else {
+                    showToast('无法确定要同步的仓库或分支');
+                }
+                hideSyncBranchDialog();
+            });
+
+            syncBranchCancel.addEventListener('click', () => {
+                hideSyncBranchDialog();
+            });
+
+            syncBranchDialog.addEventListener('click', (e) => {
+                if (e.target === syncBranchDialog) {
+                    hideSyncBranchDialog();
                 }
             });
 
@@ -1750,16 +1889,8 @@
             // 判断滚动方向
             const scrollingDown = scrollDelta > 0;
 
-            // 更新最后滚动位置
-            lastScrollPosition = currentScrollPosition;
-
             // 清除之前的定时器
             clearTimeout(scrollTimeout);
-
-            // 如果方向改变，立即更新UI
-            if (lastScrollDirection !== scrollingDown) {
-                updateToolbarVisibility(scrollingDown);
-            }
 
             // 设置新的定时器
             scrollTimeout = setTimeout(() => {
@@ -1768,11 +1899,12 @@
             }, SCROLL_DELAY);
 
             // 只有在状态改变或初次滚动时才处理
-            if (!isScrolling || lastScrollDirection !== scrollingDown) {
+            if (!isScrolling || (lastScrollDirection !== undefined && lastScrollDirection !== scrollingDown)) {
                 isScrolling = true;
                 lastScrollDirection = scrollingDown;
                 updateToolbarVisibility(scrollingDown);
             }
+            lastScrollPosition = currentScrollPosition; // Update last position after processing
         }
 
         // 更新工具栏可见性
@@ -1809,10 +1941,29 @@
             document.getElementById('fork-repo-content').classList.remove('scale-100');
         }
 
-        // 显示确认对话框
-        function showConfirmDialog(title, message, fileInfo) {
+        // 显示同步分支对话框
+        function showSyncBranchDialog(repoInfo) {
+            repoToSync = repoInfo; // 存储目标仓库信息
+            const branchToDisplay = repoInfo.defaultBranch || defaultBranchOfCurrentRepo || '默认'; // 优先使用传入的defaultBranch
+            syncTargetBranchSpan.textContent = branchToDisplay;
+            syncBranchDialog.classList.add('opacity-100', 'pointer-events-auto');
+            document.getElementById('sync-branch-content').classList.add('scale-100');
+            document.getElementById('sync-branch-content').classList.remove('scale-90');
+        }
+
+        // 隐藏同步分支对话框
+        function hideSyncBranchDialog() {
+            syncBranchDialog.classList.remove('opacity-100', 'pointer-events-auto');
+            document.getElementById('sync-branch-content').classList.add('scale-90');
+            document.getElementById('sync-branch-content').classList.remove('scale-100');
+            repoToSync = null; // 清空存储的仓库信息
+        }
+
+        // 显示确认对话框 (已修改，增加 confirmButtonText 参数)
+        function showConfirmDialog(title, message, fileInfo, confirmButtonText = '确认') {
             confirmTitle.textContent = title;
             confirmMessage.textContent = message;
+            confirmYes.textContent = confirmButtonText; // 更新确认按钮文本
             fileToDelete = fileInfo;
             confirmDialog.classList.add('opacity-100', 'pointer-events-auto');
             document.getElementById('confirm-content').classList.add('scale-100');
@@ -1926,6 +2077,9 @@
             // 构建APP选项：仅在仓库上显示
             contextBuildApp.style.display = fileInfo.type === 'repo' ? 'flex' : 'none';
 
+            // 同步分支选项：仅在仓库上显示
+            contextSyncBranch.style.display = fileInfo.type === 'repo' ? 'flex' : 'none';
+
             // Now add the visible class to trigger transition
             contextMenu.classList.add('visible');
         }
@@ -1971,6 +2125,17 @@
             selectBtn.innerHTML = '<i class="fas fa-times text-red-500"></i>';
             selectBtn.title = '取消选择';
             showBatchToolbar();
+
+            if (!currentRepo) { // 在仓库列表视图
+                batchDownloadBtn.classList.add('hidden');
+                batchSyncBtn.classList.remove('hidden');
+                batchDeleteBtn.classList.remove('hidden'); // 可以删除仓库
+            } else { // 在仓库内部文件视图
+                batchDownloadBtn.classList.remove('hidden');
+                batchSyncBtn.classList.add('hidden');
+                batchDeleteBtn.classList.remove('hidden'); // 可以删除文件
+            }
+            updateSelectAllButtonState(); // Update select all button state on entering select mode
         }
 
         // 退出选择模式
@@ -1986,6 +2151,54 @@
 
             selectBtn.innerHTML = '<i class="fas fa-check-square text-blue-500"></i>';
             selectBtn.title = '选择文件';
+
+            // Reset "Select All" button text
+            batchSelectAllText.textContent = '全选';
+
+            // 退出选择模式后，刷新工具栏按钮的可见性
+            updateToolbarButtonsVisibility();
+        }
+
+        // 全选/取消全选逻辑
+        function toggleSelectAll() {
+            const displayedItems = currentFiles; // currentFiles holds the list of items currently displayed
+
+            const isAllSelected = selectedFiles.size === displayedItems.length && displayedItems.length > 0;
+
+            // Clear existing selections first to handle toggle correctly
+            selectedFiles.clear();
+            document.querySelectorAll('.file-item.selected').forEach(itemEl => {
+                itemEl.classList.remove('selected');
+            });
+
+            if (!isAllSelected) {
+                // Select All
+                displayedItems.forEach(item => {
+                    selectedFiles.add(item);
+                    // Find the corresponding DOM element and add 'selected' class
+                    const itemEl = document.querySelector(`.file-item[data-name="${item.name}"][data-type="${item.type}"]`);
+                    if (itemEl) {
+                        itemEl.classList.add('selected'); // Corrected: Use itemEl directly
+                    }
+                });
+                batchSelectAllText.textContent = '取消全选';
+            } else {
+                // Deselect All (already cleared above)
+                batchSelectAllText.textContent = '全选';
+            }
+            updateSelectedCount();
+        }
+
+        // 更新全选按钮的文字状态
+        function updateSelectAllButtonState() {
+            const displayedItems = currentFiles;
+            const isAllSelected = selectedFiles.size === displayedItems.length && displayedItems.length > 0;
+
+            if (isAllSelected) {
+                batchSelectAllText.textContent = '取消全选';
+            } else {
+                batchSelectAllText.textContent = '全选';
+            }
         }
 
         // 认证按钮点击事件
@@ -2115,7 +2328,7 @@
             authScreen.classList.add('hidden');
             mainScreen.classList.remove('hidden');
             toolbar.classList.remove('hidden');
-            newRepoBtn.classList.remove('hidden');
+            // 初始加载时，由 loadRepositories 或 loadRepositoryContents 调用 updateToolbarButtonsVisibility
         }
 
         // 显示提示
@@ -2130,21 +2343,47 @@
             }, 3000);
         }
 
+        // 更新工具栏按钮可见性
+        function updateToolbarButtonsVisibility() {
+            // 默认隐藏所有特定按钮
+            backBtn.classList.add('hidden');
+            uploadBtn.classList.add('hidden');
+            newFolderBtn.classList.add('hidden');
+            staticSiteBtn.classList.add('hidden');
+            syncBranchBtn.classList.add('hidden');
+            newRepoBtn.classList.add('hidden');
+            forkRepoBtn.classList.add('hidden');
+            selectBtn.classList.add('hidden');
+
+            if (currentRepo) { // 在仓库内部
+                backBtn.classList.remove('hidden');
+                uploadBtn.classList.remove('hidden');
+                newFolderBtn.classList.remove('hidden');
+                selectBtn.classList.remove('hidden');
+                syncBranchBtn.classList.remove('hidden'); // 显示单个同步分支按钮
+
+                // 检查是否有 index.html 文件，决定是否显示静态网站按钮
+                const hasIndexHtml = currentFiles.some(file =>
+                    file.type === 'file' && file.name.toLowerCase() === 'index.html'
+                );
+                if (hasIndexHtml) {
+                    staticSiteBtn.classList.remove('hidden');
+                }
+            } else { // 在仓库列表视图
+                newRepoBtn.classList.remove('hidden');
+                forkRepoBtn.classList.remove('hidden');
+                selectBtn.classList.remove('hidden'); // 在仓库列表页显示选择按钮
+            }
+        }
+
         // 加载仓库列表
         async function loadRepositories() {
             showLoading();
             currentPath = '';
             currentRepo = '';
+            defaultBranchOfCurrentRepo = ''; // Reset default branch
             updateBreadcrumb([]);
-
-            // 更新按钮状态
-            backBtn.classList.add('hidden');
-            uploadBtn.classList.add('hidden');
-            newFolderBtn.classList.add('hidden');
-            selectBtn.classList.add('hidden');
-            staticSiteBtn.classList.add('hidden');
-            newRepoBtn.classList.remove('hidden');
-            forkRepoBtn.classList.remove('hidden'); // 新增：显示复刻按钮
+            exitSelectMode(); // 退出选择模式
 
             try {
                 // 使用GraphQL API获取仓库列表
@@ -2168,6 +2407,9 @@
                                             isPrivate
                                             description
                                             updatedAt
+                                            defaultBranchRef {
+                                                name
+                                            }
                                         }
                                     }
                                 }
@@ -2183,18 +2425,24 @@
                 const data = await response.json();
                 const repos = data.data.viewer.repositories.nodes;
 
-                renderFileList(repos.map(repo => ({
+                currentFiles = repos.map(repo => ({ // Store the full list of repositories
                     name: repo.name,
                     type: 'repo',
                     path: `${repo.owner.login}/${repo.name}`,
                     private: repo.isPrivate,
                     description: repo.description,
-                    updatedAt: repo.updatedAt
-                })));
+                    updatedAt: repo.updatedAt,
+                    defaultBranch: repo.defaultBranchRef ? repo.defaultBranchRef.name : 'main' // Store default branch
+                }));
+
+                renderFileList(currentFiles); // Render using currentFiles
+                updateSelectAllButtonState(); // Update select all button state after rendering
             } catch (error) {
                 console.error('加载仓库列表错误:', error);
                 showToast('加载失败: ' + error.message);
                 showEmptyState();
+            } finally {
+                updateToolbarButtonsVisibility(); // 确保按钮状态正确
             }
         }
 
@@ -2203,19 +2451,15 @@
             showLoading();
             currentRepo = repo;
             currentPath = path;
-
-            // 更新按钮状态
-            backBtn.classList.remove('hidden');
-            uploadBtn.classList.remove('hidden');
-            newFolderBtn.classList.remove('hidden');
-            selectBtn.classList.remove('hidden');
-            staticSiteBtn.classList.add('hidden');
-            newRepoBtn.classList.add('hidden');
-            forkRepoBtn.classList.add('hidden'); // 新增：隐藏复刻按钮
+            exitSelectMode(); // 退出选择模式
 
             // 更新面包屑导航
-            const pathParts = path ? path.split('/') : [];
-            updateBreadcrumb([repo, ...pathParts]);
+            // parts 将是 [owner, repoName, pathSegment1, pathSegment2, ...]
+            const pathParts = repo.split('/');
+            if (path) {
+                pathParts.push(...path.split('/'));
+            }
+            updateBreadcrumb(pathParts);
 
             try {
                 const [owner, repoName] = repo.split('/');
@@ -2232,7 +2476,7 @@
                     throw new Error('获取仓库详情失败');
                 }
                 const repoDetails = await repoDetailsResponse.json();
-                const defaultBranch = repoDetails.default_branch || 'main'; // Fallback to 'main'
+                defaultBranchOfCurrentRepo = repoDetails.default_branch || 'main'; // Store default branch
 
                 // 使用GraphQL API获取仓库内容
                 const response = await fetch('https://api.github.com/graphql', {
@@ -2273,6 +2517,8 @@
 
                 if (!data.data.repository.object) {
                     showEmptyState();
+                    currentFiles = []; // Ensure currentFiles is empty if directory is empty
+                    updateSelectAllButtonState(); // Update select all button state
                     return;
                 }
 
@@ -2282,10 +2528,10 @@
                     size: entry.object?.byteSize || 0,
                     path: path ? `${path}/${entry.name}` : entry.name,
                     download_url: entry.type === 'blob' ?
-                        `https://raw.githubusercontent.com/${owner}/${repoName}/${defaultBranch}/${path ? path + '/' : ''}${entry.name}` : null
+                        `https://raw.githubusercontent.com/${owner}/${repoName}/${defaultBranchOfCurrentRepo}/${path ? path + '/' : ''}${entry.name}` : null
                 }));
 
-                currentFiles = contents;
+                currentFiles = contents; // Store the full list of files
 
                 const sortedContents = [...contents].sort((a, b) => {
                     if (a.type === b.type) {
@@ -2295,27 +2541,20 @@
                 });
 
                 renderFileList(sortedContents);
+                updateSelectAllButtonState(); // Update select all button state after rendering
 
-                // 检查是否有index.html文件，决定是否显示静态网站按钮
-                const hasIndexHtml = contents.some(file =>
-                    file.type === 'file' && file.name.toLowerCase() === 'index.html'
-                );
-
-                if (hasIndexHtml) {
-                    staticSiteBtn.classList.remove('hidden');
-                } else {
-                    staticSiteBtn.classList.add('hidden');
-                }
             } catch (error) {
                 console.error('加载仓库内容错误:', error);
                 showToast('加载失败: ' + error.message);
                 showEmptyState();
+            } finally {
+                updateToolbarButtonsVisibility(); // 确保按钮状态正确
             }
         }
 
         // 更新面包屑导航
         function updateBreadcrumb(parts) {
-            const breadcrumbContainer = currentPathElement.querySelector('.breadcrumb');
+            const breadcrumbContainer = document.getElementById('current-path').querySelector('.breadcrumb');
             breadcrumbContainer.innerHTML = '';
 
             // 添加"我的仓库"根路径
@@ -2325,38 +2564,51 @@
             rootItem.onclick = () => loadRepositories();
             breadcrumbContainer.appendChild(rootItem);
 
-            if (parts.length === 0) return;
+            // 如果没有特定仓库被加载（只是“我的仓库”视图）
+            if (parts.length === 0 || (parts.length === 1 && parts[0] === '')) {
+                 return;
+            }
 
             // 添加分隔符
-            const separator = document.createElement('div');
+            let separator = document.createElement('div');
             separator.className = 'breadcrumb-separator';
             separator.innerHTML = '<i class="fas fa-chevron-right"></i>';
             breadcrumbContainer.appendChild(separator);
 
-            // 添加仓库部分
+            // 添加仓库部分 (owner/repoName)
+            // parts 数组的第一个元素是 owner，第二个元素是 repoName
+            const owner = parts[0];
+            const repoName = parts[1];
+            const repoFullName = `${owner}/${repoName}`;
+
             const repoItem = document.createElement('div');
             repoItem.className = 'breadcrumb-item';
-            repoItem.textContent = parts[0];
-            repoItem.onclick = () => loadRepositoryContents(parts[0]);
+            // 修复：显示所有者/仓库名
+            repoItem.textContent = repoFullName;
+            repoItem.onclick = () => loadRepositoryContents(repoFullName); // 导航到仓库根目录
             breadcrumbContainer.appendChild(repoItem);
 
-            // 添加路径部分
-            let currentPath = parts[0];
-            for (let i = 1; i < parts.length; i++) {
-                currentPath += '/' + parts[i];
-
+            // 添加子路径部分
+            // 从索引 2 开始，因为 parts[0] 是所有者，parts[1] 是仓库名称
+            let currentPathSegments = [owner, repoName]; // 用于构建子路径的累积路径
+            for (let i = 2; i < parts.length; i++) {
                 // 添加分隔符
-                const pathSeparator = document.createElement('div');
-                pathSeparator.className = 'breadcrumb-separator';
-                pathSeparator.innerHTML = '<i class="fas fa-chevron-right"></i>';
-                breadcrumbContainer.appendChild(pathSeparator);
+                separator = document.createElement('div');
+                separator.className = 'breadcrumb-separator';
+                separator.innerHTML = '<i class="fas fa-chevron-right"></i>';
+                breadcrumbContainer.appendChild(separator);
 
                 // 添加路径项
                 const pathItem = document.createElement('div');
                 pathItem.className = 'breadcrumb-item';
-                pathItem.textContent = parts[i];
+                pathItem.textContent = parts[i]; // 显示当前路径段的名称
+
+                // 构建仓库内的完整路径，不包含 owner/repoName 部分
+                currentPathSegments.push(parts[i]);
+                const pathInRepo = currentPathSegments.slice(2).join('/'); // 从第三个元素开始（即第一个路径段）
+                
                 pathItem.onclick = () => {
-                    loadRepositoryContents(parts[0], parts.slice(1, i + 1).join('/'));
+                    loadRepositoryContents(repoFullName, pathInRepo);
                 };
                 breadcrumbContainer.appendChild(pathItem);
             }
@@ -2386,6 +2638,11 @@
                 fileItem.className = 'file-item p-4 flex items-center';
                 fileItem.dataset.name = item.name;
                 fileItem.dataset.type = item.type;
+
+                // If this item is already selected, apply the 'selected' class
+                if (selectedFiles.has(item)) {
+                    fileItem.classList.add('selected');
+                }
 
                 // 添加右键菜单
                 fileItem.addEventListener('contextmenu', (e) => {
@@ -2444,6 +2701,7 @@
                 fileItem.appendChild(infoContainer);
                 fileListElement.appendChild(fileItem);
             });
+            updateSelectAllButtonState(); // Ensure button state is correct after rendering
         }
 
         // 切换文件选择状态
@@ -2456,6 +2714,7 @@
                 selectedFiles.add(fileInfo);
             }
             updateSelectedCount();
+            updateSelectAllButtonState(); // Update select all button state
 
             // 如果没有选中文件，退出选择模式
             if (selectedFiles.size === 0) {
@@ -2548,7 +2807,7 @@
                 if (errors === 0) {
                     showToast(`已成功打包下载 ${count} 个文件`);
                 } else {
-                    showToast(`打包完成: ${count} 成功, ${errors} 失败`);
+                    showToast(`打包完成: ${count} 成功, ${failCount} 失败`);
                 }
             } catch (error) {
                 console.error('打包下载失败:', error);
@@ -2789,12 +3048,13 @@
                     throw new Error(errorData.message || '删除仓库失败');
                 }
 
-                showToast('仓库删除成功');
-                loadRepositories();
+                // showToast('仓库删除成功'); // Handled by batch delete success message
+                // loadRepositories(); // Handled by batch delete success message
 
             } catch (error) {
                 console.error('删除仓库错误:', error);
                 showToast('删除仓库失败: ' + error.message);
+                throw error; // Re-throw to indicate failure in batch operation
             }
         }
 
@@ -2865,7 +3125,14 @@
             try {
                 const [owner, repo] = currentRepo.split('/');
 
-                // 获取文件内容
+                // 提示用户输入新文件名
+                const newName = prompt('请输入新的文件名:', fileInfo.name);
+                if (!newName || newName.trim() === '' || newName === fileInfo.name) {
+                    showToast('重命名已取消或文件名未改变');
+                    return;
+                }
+
+                // 获取文件内容和SHA
                 const contentResponse = await fetch(
                     `https://api.github.com/repos/${owner}/${repo}/contents/${currentPath ? currentPath + '/' : ''}${fileInfo.name}`,
                     {
@@ -2885,10 +3152,6 @@
                 const content = contentData.content;
                 const encoding = contentData.encoding;
 
-                // 提示用户输入新文件名
-                const newName = prompt('请输入新的文件名:', fileInfo.name);
-                if (!newName || newName === fileInfo.name) return;
-
                 // 删除原文件
                 const deleteResponse = await fetch(
                     `https://api.github.com/repos/${owner}/${repo}/contents/${currentPath ? currentPath + '/' : ''}${fileInfo.name}`,
@@ -2906,7 +3169,8 @@
                 );
 
                 if (!deleteResponse.ok) {
-                    throw new Error('删除原文件失败');
+                    const errorData = await deleteResponse.json();
+                    throw new Error(errorData.message || '删除原文件失败');
                 }
 
                 // 创建新文件
@@ -3517,6 +3781,76 @@
                 console.error('复刻仓库错误:', error);
                 showToast('复刻仓库失败: ' + error.message);
             }
+        }
+
+        // 同步分支函数
+        async function syncBranch(repoFullName, branchName) {
+            try {
+                const [owner, repo] = repoFullName.split('/');
+                showToast(`正在同步分支 ${branchName} for ${repoFullName}...`);
+
+                const response = await fetch(`https://api.github.com/repos/${owner}/${repo}/merge-upstream`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `token ${githubToken}`,
+                        'Accept': 'application/vnd.github.v3+json',
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        branch: branchName
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    showToast(`分支 ${branchName} for ${repoFullName} 同步成功！`);
+                    console.log('Sync successful:', data);
+                    // Optionally refresh the view if it's the current repo
+                    if (currentRepo === repoFullName) {
+                        loadRepositoryContents(repoFullName, currentPath);
+                    }
+                } else {
+                    const errorData = await response.json();
+                    let errorMessage = errorData.message || '同步分支失败';
+
+                    if (response.status === 409) { // Conflict
+                        errorMessage = `同步失败：${errorMessage}。可能存在冲突，请手动解决。`;
+                    } else if (response.status === 404) { // Not Found (e.g., not a fork or upstream not found)
+                        errorMessage = `同步失败：${errorMessage}。请确认这是一个复刻仓库且上游分支存在。`;
+                    }
+
+                    throw new Error(errorMessage);
+                }
+            } catch (error) {
+                console.error(`同步分支 ${repoFullName} 错误:`, error);
+                showToast(`同步分支 ${repoFullName} 失败: ` + error.message);
+                throw error; // Re-throw to propagate failure for batch operations
+            }
+        }
+
+        // 批量同步仓库函数
+        async function performBatchSync(repos) {
+            let successCount = 0;
+            let failCount = 0;
+            showToast(`开始批量同步 ${repos.length} 个仓库...`);
+
+            for (const repo of repos) {
+                try {
+                    await syncBranch(repo.path, repo.defaultBranch);
+                    successCount++;
+                } catch (error) {
+                    // Error already logged and toasted by syncBranch
+                    failCount++;
+                }
+            }
+
+            if (failCount === 0) {
+                showToast(`成功同步 ${successCount} 个仓库`);
+            } else {
+                showToast(`批量同步完成: ${successCount} 成功, ${failCount} 失败`);
+            }
+            exitSelectMode();
+            loadRepositories(); // Refresh the repo list after batch sync
         }
 
     </script>
