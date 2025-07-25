@@ -320,17 +320,6 @@
             .dialog-btn {
                 padding: 5px 10px;
             }
-         /* 全局强制换行 */
-       * {
-        word-wrap: break-word !important;
-        word-break: break-all !important;
-        white-space: normal !important;
-        /* 禁止文本选择，防止长按复制 */
-        user-select: none !important;
-        -webkit-user-select: none !important;
-        -moz-user-select: none !important;
-        -ms-user-select: none !important
-        }
         }
 
         /* 加载动画 */
@@ -1362,27 +1351,34 @@
                 hideConfirmDialog(); // Close the dialog immediately upon confirmation
                 exitSelectMode(); // Close batch toolbar when confirming any action
 
-                if (currentFileToDelete && Array.isArray(currentFileToDelete) && currentFileToDelete.every(item => item.type === 'repo')) {
-                    // 这是批量同步操作
-                    await performBatchSync(currentFileToDelete);
-                } else if (currentFileToDelete) {
-                    // 现有删除逻辑
-                    if (Array.isArray(currentFileToDelete)) {
-                        // 批量删除文件或仓库
-                        const isRepos = currentFileToDelete.every(item => item.type === 'repo');
-                        if (isRepos) {
-                            // 批量删除仓库
-                            await Promise.all(currentFileToDelete.map(repo => deleteRepository(repo)));
-                            showToast(`成功删除 ${currentFileToDelete.length} 个仓库`);
-                            loadRepositories(); // Refresh repo list
-                        } else {
-                            // 批量删除文件
-                            await deleteFiles(currentFileToDelete);
+                if (currentFileToDelete && Array.isArray(currentFileToDelete)) {
+                    const isRepos = currentFileToDelete.every(item => item.type === 'repo');
+                    if (isRepos) {
+                        // This is a batch operation on repositories (either delete or sync)
+                        // Determine if it's a delete or sync based on the context/button text
+                        if (confirmYes.textContent === '确认同步') {
+                            await performBatchSync(currentFileToDelete);
+                        } else { // Assume it's batch delete if not sync
+                            await performBatchDelete(currentFileToDelete);
                         }
-                    } else if (currentFileToDelete.type === 'repo') {
-                        deleteRepository(currentFileToDelete);
                     } else {
-                        deleteFile(currentFileToDelete);
+                        // Batch delete files or folders
+                        await performBatchDelete(currentFileToDelete);
+                    }
+                } else if (currentFileToDelete) {
+                    // Single item operation (delete file or repo or folder)
+                    try {
+                        if (currentFileToDelete.type === 'repo') {
+                            await deleteRepository(currentFileToDelete);
+                            showToast(`成功删除仓库 "${currentFileToDelete.name}"`);
+                            loadRepositories(); // Refresh repo list after single repo delete
+                        } else { // file or dir
+                            await deleteFile(currentFileToDelete);
+                            showToast(`成功删除${currentFileToDelete.type === 'dir' ? '文件夹' : '文件'} "${currentFileToDelete.name}"`);
+                            loadRepositoryContents(currentRepo, currentPath); // Refresh file list
+                        }
+                    } catch (error) {
+                        showToast(`删除失败: ${error.message}`);
                     }
                 }
             });
@@ -1482,19 +1478,21 @@
             });
 
             batchDeleteBtn.addEventListener('click', () => {
-                if (selectedFiles.size > 0) {
-                    const selectedItems = Array.from(selectedFiles);
-                    const isRepos = selectedItems.every(item => item.type === 'repo');
-                    const message = isRepos
-                        ? `您确定要删除选中的 ${selectedItems.length} 个仓库吗？此操作不可撤销且会删除所有仓库内容。`
-                        : `您确定要删除选中的 ${selectedItems.length} 个文件吗？此操作不可撤销。`;
-                    showConfirmDialog(
-                        isRepos ? '确认删除仓库' : '确认删除',
-                        message,
-                        selectedItems,
-                        isRepos ? '确认删除仓库' : '确认删除'
-                    );
+                if (selectedFiles.size === 0) {
+                    showToast('请选择要删除的文件或仓库');
+                    return;
                 }
+                const selectedItems = Array.from(selectedFiles);
+                const isRepos = selectedItems.every(item => item.type === 'repo');
+                const message = isRepos
+                    ? `您确定要删除选中的 ${selectedItems.length} 个仓库吗？此操作不可撤销且会删除所有仓库内容。`
+                    : `您确定要删除选中的 ${selectedItems.length} 个文件/文件夹吗？此操作不可撤销。`;
+                showConfirmDialog(
+                    isRepos ? '确认删除仓库' : '确认删除',
+                    message,
+                    selectedItems,
+                    isRepos ? '确认删除仓库' : '确认删除'
+                );
             });
 
             // 新增批量同步按钮事件
@@ -1699,11 +1697,11 @@
             });
 
             // 同步分支对话框事件
-            syncBranchConfirm.addEventListener('click', () => {
+            syncBranchConfirm.addEventListener('click', async () => {
                 if (repoToSync && repoToSync.type === 'repo') { // Use repoToSync for context menu initiated sync
-                    syncBranch(repoToSync.path, repoToSync.defaultBranch);
+                    await syncBranch(repoToSync.path, repoToSync.defaultBranch);
                 } else if (currentRepo && defaultBranchOfCurrentRepo) { // Fallback for main toolbar button (if it existed and used this logic)
-                    syncBranch(currentRepo, defaultBranchOfCurrentRepo);
+                    await syncBranch(currentRepo, defaultBranchOfCurrentRepo);
                 } else {
                     showToast('无法确定要同步的仓库或分支');
                 }
@@ -2128,12 +2126,12 @@
 
             if (!currentRepo) { // 在仓库列表视图
                 batchDownloadBtn.classList.add('hidden');
-                batchSyncBtn.classList.remove('hidden');
-                batchDeleteBtn.classList.remove('hidden'); // 可以删除仓库
+                batchSyncBtn.classList.remove('hidden'); // Show batch sync for repos
+                batchDeleteBtn.classList.remove('hidden'); // Can delete repos
             } else { // 在仓库内部文件视图
                 batchDownloadBtn.classList.remove('hidden');
-                batchSyncBtn.classList.add('hidden');
-                batchDeleteBtn.classList.remove('hidden'); // 可以删除文件
+                batchSyncBtn.classList.add('hidden'); // Hide batch sync for files
+                batchDeleteBtn.classList.remove('hidden'); // Can delete files
             }
             updateSelectAllButtonState(); // Update select all button state on entering select mode
         }
@@ -2730,6 +2728,7 @@
             if (selectedFiles.size === 1) {
                 const file = selectedFiles.values().next().value;
                 await downloadFile(file);
+                exitSelectMode(); // Exit select mode after single download
                 return;
             }
 
@@ -2807,7 +2806,7 @@
                 if (errors === 0) {
                     showToast(`已成功打包下载 ${count} 个文件`);
                 } else {
-                    showToast(`打包完成: ${count} 成功, ${failCount} 失败`);
+                    showToast(`打包完成: ${count} 成功, ${errors} 失败`);
                 }
             } catch (error) {
                 console.error('打包下载失败:', error);
@@ -2903,76 +2902,22 @@
             return date.toLocaleDateString() + ' ' + date.toLocaleTimeString();
         }
 
-        // 删除文件
+        // 删除文件或文件夹 (单个)
         async function deleteFile(fileInfo) {
             try {
-                // 如果是批量删除
-                if (Array.isArray(fileInfo)) {
-                    return deleteFiles(fileInfo);
-                }
-
                 const [owner, repo] = currentRepo.split('/');
+                const filePath = currentPath ? `${currentPath}/${fileInfo.name}` : fileInfo.name;
+                let targetPath = filePath;
+                let sha = null;
 
-                // 获取文件SHA
-                const shaResponse = await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/contents/${currentPath ? currentPath + '/' : ''}${fileInfo.name}`,
-                    {
-                        headers: {
-                            'Authorization': `token ${githubToken}`,
-                            'Accept': 'application/vnd.github.v3+json'
-                        }
-                    }
-                );
-
-                if (!shaResponse.ok) {
-                    throw new Error('获取文件信息失败');
-                }
-
-                const shaData = await shaResponse.json();
-                const sha = shaData.sha;
-
-                // 删除文件
-                const deleteResponse = await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/contents/${currentPath ? currentPath + '/' : ''}${fileInfo.name}`,
-                    {
-                        method: 'DELETE',
-                        headers: {
-                            'Authorization': `token ${githubToken}`,
-                            'Accept': 'application/vnd.github.v3+json'
-                        },
-                        body: JSON.stringify({
-                            message: `Delete ${fileInfo.name}`,
-                            sha: sha
-                        })
-                    }
-                );
-
-                if (!deleteResponse.ok) {
-                    const errorData = await deleteResponse.json();
-                    throw new Error(errorData.message || '删除文件失败');
-                }
-
-                showToast('文件删除成功');
-                loadRepositoryContents(currentRepo, currentPath);
-
-            } catch (error) {
-                console.error('删除文件错误:', error);
-                showToast('删除文件失败: ' + error.message);
-            }
-        }
-
-        // 批量删除文件
-        async function deleteFiles(files) {
-            try {
-                let successCount = 0;
-                let failCount = 0;
-                const [owner, repo] = currentRepo.split('/');
-
-                for (const file of files) {
+                if (fileInfo.type === 'dir') {
+                    // For directories, we attempt to delete the .gitkeep file.
+                    // If .gitkeep is not found, it implies the folder is either truly empty (and thus not tracked by Git)
+                    // or contains other files, which this simple UI does not support deleting recursively.
+                    targetPath = `${filePath}/.gitkeep`;
                     try {
-                        // 获取文件SHA
                         const shaResponse = await fetch(
-                            `https://api.github.com/repos/${owner}/${repo}/contents/${currentPath ? currentPath + '/' : ''}${file.name}`,
+                            `https://api.github.com/repos/${owner}/${repo}/contents/${targetPath}`,
                             {
                                 headers: {
                                     'Authorization': `token ${githubToken}`,
@@ -2980,53 +2925,109 @@
                                 }
                             }
                         );
-
-                        if (!shaResponse.ok) {
-                            throw new Error('获取文件信息失败');
+                        if (shaResponse.ok) {
+                            const shaData = await shaResponse.json();
+                            sha = shaData.sha;
+                        } else if (shaResponse.status === 404) {
+                            // If .gitkeep is not found, check if the directory itself exists and is empty.
+                            // GitHub API doesn't track empty directories. If it's a directory and .gitkeep is not there,
+                            // it means it's either truly empty (and already "deleted" from Git's perspective)
+                            // or it contains other files.
+                            // For simplicity, we'll assume if .gitkeep isn't there, and it's a directory,
+                            // we can't delete it this way or it's already gone.
+                            throw new Error(`无法删除文件夹 "${fileInfo.name}"。请确保它是空的或只包含 .gitkeep 文件。`);
+                        } else {
+                            const errorData = await shaResponse.json();
+                            throw new Error(errorData.message || '获取文件夹信息失败');
                         }
-
-                        const shaData = await shaResponse.json();
-                        const sha = shaData.sha;
-
-                        // 删除文件
-                        const deleteResponse = await fetch(
-                            `https://api.github.com/repos/${owner}/${repo}/contents/${currentPath ? currentPath + '/' : ''}${file.name}`,
-                            {
-                                method: 'DELETE',
-                                headers: {
-                                    'Authorization': `token ${githubToken}`,
-                                    'Accept': 'application/vnd.github.v3+json'
-                                },
-                                body: JSON.stringify({
-                                    message: `Delete ${file.name}`,
-                                    sha: sha
-                                })
-                            }
-                        );
-
-                        if (!deleteResponse.ok) {
-                            throw new Error('删除文件失败');
-                        }
-
-                        successCount++;
                     } catch (error) {
-                        console.error(`删除文件 ${file.name} 失败:`, error);
-                        failCount++;
+                        // Re-throw the specific error message for the user
+                        throw error;
                     }
+                } else { // It's a file
+                    // Get file SHA
+                    const shaResponse = await fetch(
+                        `https://api.github.com/repos/${owner}/${repo}/contents/${targetPath}`,
+                        {
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            }
+                        }
+                    );
+
+                    if (!shaResponse.ok) {
+                        const errorData = await shaResponse.json();
+                        throw new Error(errorData.message || '获取文件信息失败');
+                    }
+
+                    const shaData = await shaResponse.json();
+                    sha = shaData.sha;
                 }
 
-                if (failCount === 0) {
-                    showToast(`成功删除 ${successCount} 个文件`);
-                } else {
-                    showToast(`删除完成: ${successCount} 成功, ${failCount} 失败`);
+                // Perform deletion
+                const deleteResponse = await fetch(
+                    `https://api.github.com/repos/${owner}/${repo}/contents/${targetPath}`,
+                    {
+                        method: 'DELETE',
+                        headers: {
+                            'Authorization': `token ${githubToken}`,
+                            'Accept': 'application/vnd.github.v3+json'
+                        },
+                        body: JSON.stringify({
+                            message: `Delete ${fileInfo.name} (${fileInfo.type})`,
+                            sha: sha,
+                            branch: defaultBranchOfCurrentRepo // Specify branch for deletion
+                        })
+                    }
+                );
+
+                if (!deleteResponse.ok) {
+                    const errorData = await deleteResponse.json();
+                    throw new Error(errorData.message || `删除 ${fileInfo.type === 'dir' ? '文件夹' : '文件'} 失败`);
                 }
-
-                exitSelectMode();
-                loadRepositoryContents(currentRepo, currentPath);
-
+                // No toast or refresh here, handled by the caller (confirmYes or performBatchDelete)
             } catch (error) {
-                console.error('批量删除文件错误:', error);
-                showToast('批量删除文件失败: ' + error.message);
+                console.error(`删除 ${fileInfo.type === 'dir' ? '文件夹' : '文件'} ${fileInfo.name} 错误:`, error);
+                throw error; // Re-throw to propagate for batch operations
+            }
+        }
+
+        // 批量删除文件或仓库
+        async function performBatchDelete(items) {
+            let successCount = 0;
+            let failCount = 0;
+            const isRepos = items.every(item => item.type === 'repo');
+            const itemType = isRepos ? '仓库' : '文件/文件夹'; // Updated text for clarity
+            showToast(`开始批量删除 ${items.length} 个${itemType}...`);
+
+            for (const item of items) {
+                try {
+                    if (item.type === 'repo') {
+                        await deleteRepository(item);
+                    } else { // file or dir
+                        await deleteFile(item);
+                    }
+                    successCount++;
+                } catch (error) {
+                    console.error(`删除 ${itemType} ${item.name} 失败:`, error);
+                    // Show individual error for failed items in batch
+                    showToast(`删除 ${item.name} 失败: ${error.message}`);
+                    failCount++;
+                }
+            }
+
+            if (failCount === 0) {
+                showToast(`成功删除 ${successCount} 个${itemType}`);
+            } else {
+                showToast(`批量删除完成: ${successCount} 成功, ${failCount} 失败`);
+            }
+
+            exitSelectMode();
+            if (isRepos) {
+                loadRepositories(); // Refresh repo list after batch repo delete
+            } else {
+                loadRepositoryContents(currentRepo, currentPath); // Refresh file list after batch file/folder delete
             }
         }
 
@@ -3047,13 +3048,9 @@
                     const errorData = await response.json();
                     throw new Error(errorData.message || '删除仓库失败');
                 }
-
-                // showToast('仓库删除成功'); // Handled by batch delete success message
-                // loadRepositories(); // Handled by batch delete success message
-
+                // No toast or refresh here, handled by the caller (confirmYes or performBatchDelete)
             } catch (error) {
                 console.error('删除仓库错误:', error);
-                showToast('删除仓库失败: ' + error.message);
                 throw error; // Re-throw to indicate failure in batch operation
             }
         }
@@ -3132,76 +3129,160 @@
                     return;
                 }
 
-                // 获取文件内容和SHA
-                const contentResponse = await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/contents/${currentPath ? currentPath + '/' : ''}${fileInfo.name}`,
-                    {
-                        headers: {
-                            'Authorization': `token ${githubToken}`,
-                            'Accept': 'application/vnd.github.v3+json'
+                // Determine target path based on file type
+                const oldFilePath = currentPath ? `${currentPath}/${fileInfo.name}` : fileInfo.name;
+                const newFilePath = currentPath ? `${currentPath}/${newName}` : newName;
+
+                // For directories, we are effectively renaming the .gitkeep file
+                // This is a simplification; true directory rename is complex in Git API
+                if (fileInfo.type === 'dir') {
+                    showToast('文件夹重命名功能仅支持重命名其内部的 .gitkeep 文件，不影响其他内容。');
+                    // If it's a directory, we assume it's represented by a .gitkeep file.
+                    // We'll try to rename the .gitkeep file.
+                    // This is a limitation: it won't rename the actual folder structure if it contains other files.
+                    const oldGitkeepPath = `${oldFilePath}/.gitkeep`;
+                    const newGitkeepPath = `${newFilePath}/.gitkeep`;
+
+                    // Get SHA of old .gitkeep
+                    const oldShaResponse = await fetch(
+                        `https://api.github.com/repos/${owner}/${repo}/contents/${oldGitkeepPath}`,
+                        {
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            }
                         }
-                    }
-                );
+                    );
 
-                if (!contentResponse.ok) {
-                    throw new Error('获取文件内容失败');
+                    if (!oldShaResponse.ok) {
+                        const errorData = await oldShaResponse.json();
+                        throw new Error(errorData.message || '获取原文件夹 .gitkeep 信息失败');
+                    }
+                    const oldShaData = await oldShaResponse.json();
+                    const oldSha = oldShaData.sha;
+                    const content = oldShaData.content; // Content of .gitkeep is usually empty base64
+                    const encoding = oldShaData.encoding;
+
+                    // Delete old .gitkeep
+                    const deleteResponse = await fetch(
+                        `https://api.github.com/repos/${owner}/${repo}/contents/${oldGitkeepPath}`,
+                        {
+                            method: 'DELETE',
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            },
+                            body: JSON.stringify({
+                                message: `Rename folder ${fileInfo.name} to ${newName} (delete old .gitkeep)`,
+                                sha: oldSha,
+                                branch: defaultBranchOfCurrentRepo
+                            })
+                        }
+                    );
+
+                    if (!deleteResponse.ok) {
+                        const errorData = await deleteResponse.json();
+                        throw new Error(errorData.message || '删除原文件夹 .gitkeep 失败');
+                    }
+
+                    // Create new .gitkeep in new folder path
+                    const createResponse = await fetch(
+                        `https://api.github.com/repos/${owner}/${repo}/contents/${newGitkeepPath}`,
+                        {
+                            method: 'PUT',
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            },
+                            body: JSON.stringify({
+                                message: `Rename folder ${fileInfo.name} to ${newName} (create new .gitkeep)`,
+                                content: content,
+                                encoding: encoding,
+                                branch: defaultBranchOfCurrentRepo
+                            })
+                        }
+                    );
+
+                    if (!createResponse.ok) {
+                        const errorData = await createResponse.json();
+                        throw new Error(errorData.message || '创建新文件夹 .gitkeep 失败');
+                    }
+
+                } else { // It's a file
+                    // Get file content and SHA
+                    const contentResponse = await fetch(
+                        `https://api.github.com/repos/${owner}/${repo}/contents/${oldFilePath}`,
+                        {
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            }
+                        }
+                    );
+
+                    if (!contentResponse.ok) {
+                        throw new Error('获取文件内容失败');
+                    }
+
+                    const contentData = await contentResponse.json();
+                    const sha = contentData.sha;
+                    const content = contentData.content;
+                    const encoding = contentData.encoding;
+
+                    // Delete original file
+                    const deleteResponse = await fetch(
+                        `https://api.github.com/repos/${owner}/${repo}/contents/${oldFilePath}`,
+                        {
+                            method: 'DELETE',
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            },
+                            body: JSON.stringify({
+                                message: `Rename ${fileInfo.name} to ${newName}`,
+                                sha: sha,
+                                branch: defaultBranchOfCurrentRepo
+                            })
+                        }
+                    );
+
+                    if (!deleteResponse.ok) {
+                        const errorData = await deleteResponse.json();
+                        throw new Error(errorData.message || '删除原文件失败');
+                    }
+
+                    // Create new file
+                    const createResponse = await fetch(
+                        `https://api.github.com/repos/${owner}/${repo}/contents/${newFilePath}`,
+                        {
+                            method: 'PUT',
+                            headers: {
+                                'Authorization': `token ${githubToken}`,
+                                'Accept': 'application/vnd.github.v3+json'
+                            },
+                            body: JSON.stringify({
+                                message: `Rename ${fileInfo.name} to ${newName}`,
+                                content: content,
+                                encoding: encoding,
+                                branch: defaultBranchOfCurrentRepo
+                            })
+                        }
+                    );
+
+                    if (!createResponse.ok) {
+                        const errorData = await createResponse.json();
+                        throw new Error(errorData.message || '创建新文件失败');
+                    }
                 }
 
-                const contentData = await contentResponse.json();
-                const sha = contentData.sha;
-                const content = contentData.content;
-                const encoding = contentData.encoding;
-
-                // 删除原文件
-                const deleteResponse = await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/contents/${currentPath ? currentPath + '/' : ''}${fileInfo.name}`,
-                    {
-                        method: 'DELETE',
-                        headers: {
-                            'Authorization': `token ${githubToken}`,
-                            'Accept': 'application/vnd.github.v3+json'
-                        },
-                        body: JSON.stringify({
-                            message: `Rename ${fileInfo.name} to ${newName}`,
-                            sha: sha
-                        })
-                    }
-                );
-
-                if (!deleteResponse.ok) {
-                    const errorData = await deleteResponse.json();
-                    throw new Error(errorData.message || '删除原文件失败');
-                }
-
-                // 创建新文件
-                const createResponse = await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/contents/${currentPath ? currentPath + '/' : ''}${newName}`,
-                    {
-                        method: 'PUT',
-                        headers: {
-                            'Authorization': `token ${githubToken}`,
-                            'Accept': 'application/vnd.github.v3+json'
-                        },
-                        body: JSON.stringify({
-                            message: `Rename ${fileInfo.name} to ${newName}`,
-                            content: content,
-                            encoding: encoding
-                        })
-                    }
-                );
-
-                if (createResponse.ok) {
-                    showToast('文件重命名成功');
-                    loadRepositoryContents(currentRepo, currentPath);
-                } else {
-                    const errorData = await createResponse.json();
-                    throw new Error(errorData.message || '创建新文件失败');
-                }
+                showToast(`${fileInfo.type === 'dir' ? '文件夹' : '文件'}重命名成功`);
+                loadRepositoryContents(currentRepo, currentPath);
             } catch (error) {
-                console.error('重命名文件错误:', error);
-                showToast('重命名文件失败: ' + error.message);
+                console.error('重命名错误:', error);
+                showToast(`重命名失败: ${error.message}`);
             }
         }
+
 
         // 上传选中的文件（修改后的版本）
         async function uploadSelectedFile() {
@@ -3291,7 +3372,8 @@
                 const uploadData = {
                     message: `Upload ${file.name}`,
                     content: base64Content,
-                    ...(sha && { sha }) // 只有sha存在时才包含
+                    ...(sha && { sha }), // 只有sha存在时才包含
+                    branch: defaultBranchOfCurrentRepo // Specify branch for upload
                 };
 
                 // 5. 执行上传
@@ -3332,7 +3414,7 @@
             try {
                 const [owner, repo] = currentRepo.split('/');
                 const response = await fetch(
-                    `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
+                    `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}?ref=${defaultBranchOfCurrentRepo}`, // Specify branch for SHA lookup
                     {
                         headers: {
                             'Authorization': `token ${githubToken}`,
@@ -3823,7 +3905,6 @@
                 }
             } catch (error) {
                 console.error(`同步分支 ${repoFullName} 错误:`, error);
-                showToast(`同步分支 ${repoFullName} 失败: ` + error.message);
                 throw error; // Re-throw to propagate failure for batch operations
             }
         }
@@ -3839,7 +3920,7 @@
                     await syncBranch(repo.path, repo.defaultBranch);
                     successCount++;
                 } catch (error) {
-                    // Error already logged and toasted by syncBranch
+                    // Error already logged and toasted by syncBranch, but we catch it here to count failures
                     failCount++;
                 }
             }
